@@ -168,6 +168,8 @@ def cli(interpreter):
   
   if args.debug:
     interpreter.debug_mode = True
+  if args.use_langchain:
+    interpreter.use_langchain = True
   if args.use_azure:
     interpreter.use_azure = True
     interpreter.local = False
@@ -211,6 +213,7 @@ def cli(interpreter):
 
   # Run the chat method
   if args.use_langchain:
+    interpreter.welcome_langchain()
     interpreter.chat_langchain()
   else:
     interpreter.chat()
