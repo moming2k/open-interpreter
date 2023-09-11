@@ -38,7 +38,8 @@ import pkg_resources
 import getpass
 import requests
 import readline
-import tokentrim as ttfrom rich import print
+import tokentrim as tt
+from rich import print
 from rich.markdown import Markdown
 from rich.rule import Rule
 
