@@ -60,6 +60,7 @@ def cli(interpreter):
   LOCAL_RUN = os.getenv('INTERPRETER_CLI_LOCAL_RUN', 'False') == 'True'
   DEBUG = os.getenv('INTERPRETER_CLI_DEBUG', 'False') == 'True'
   USE_AZURE = os.getenv('INTERPRETER_CLI_USE_AZURE', 'False') == 'True'
+  USE_LANGCHAIN = os.getenv('INTERPRETER_CLI_USE_LANGCHAIN', 'False') == 'True'
 
   # Setup CLI
   parser = argparse.ArgumentParser(description='Chat with Open Interpreter.')
@@ -113,6 +114,11 @@ def cli(interpreter):
                       action='store_true',
                       default=USE_AZURE,
                       help='use Azure OpenAI Services')
+
+  parser.add_argument('--use-langchain',
+                      action='store_true',
+                      default=USE_LANGCHAIN,
+                      help='Warning - Experimental: use langchain interface')
   
   parser.add_argument('--version',
                       action='store_true',
@@ -204,4 +210,8 @@ def cli(interpreter):
 
 
   # Run the chat method
-  interpreter.chat()
+  if args.use_langchain:
+    interpreter.chat_langchain()
+  else:
+    interpreter.chat()
+

@@ -302,6 +302,121 @@ class Interpreter:
     if return_messages:
         return self.messages
 
+  def chat_langchain(self, message=None, return_messages=False):
+
+    # Connect to an LLM (an large language model)
+    if not self.local:
+      # gpt-4
+      self.verify_api_key()
+
+    # ^ verify_api_key may set self.local to True, so we run this as an 'if', not 'elif':
+    if self.local:
+
+      # Code-Llama
+      if self.llama_instance == None:
+
+        # Find or install Code-Llama
+        try:
+          self.llama_instance = get_hf_llm(self.model, self.debug_mode,
+                                           self.context_window)
+          if self.llama_instance == None:
+            # They cancelled.
+            return
+        except:
+          traceback.print_exc()
+          # If it didn't work, apologize and switch to GPT-4
+
+          print(Markdown("".join([
+            f"> Failed to install `{self.model}`.",
+            f"\n\n**Common Fixes:** You can follow our simple setup docs at the link below to resolve common errors.\n\n```\nhttps://github.com/KillianLucas/open-interpreter/tree/main/docs\n```",
+            f"\n\n**If you've tried that and you're still getting an error, we have likely not built the proper `{self.model}` support for your system.**",
+            "\n\n*( Running language models locally is a difficult task!* If you have insight into the best way to implement this across platforms/architectures, please join the Open Interpreter community Discord and consider contributing the project's development. )",
+            "\n\nPress enter to switch to `GPT-4` (recommended)."
+          ])))
+          input()
+
+          # Switch to GPT-4
+          self.local = False
+          self.model = "gpt-4"
+          self.verify_api_key()
+
+    # Display welcome message
+    welcome_message = ""
+
+    if self.debug_mode:
+      welcome_message += "> Entered debug mode"
+
+    # If self.local, we actually don't use self.model
+    # (self.auto_run is like advanced usage, we display no messages)
+    if not self.local and not self.auto_run:
+
+      if self.use_azure:
+        notice_model = f"{self.azure_deployment_name} (Azure)"
+      else:
+        notice_model = f"{self.model.upper()}"
+      welcome_message += f"\n> Model set to `{notice_model}`\n\n**Tip:** To run locally, use `interpreter --local`"
+
+    if self.local:
+      welcome_message += f"\n> Model set to `{self.model}`"
+
+    # If not auto_run, tell the user we'll ask permission to run code
+    # We also tell them here how to exit Open Interpreter
+    if not self.auto_run:
+      welcome_message += "\n\n" + confirm_mode_message
+
+    welcome_message = welcome_message.strip()
+
+    # Print welcome message with newlines on either side (aesthetic choice)
+    # unless we're starting with a blockquote (aesthetic choice)
+    if welcome_message != "":
+      if welcome_message.startswith(">"):
+        print(Markdown(welcome_message), '')
+      else:
+        print('', Markdown(welcome_message), '')
+
+    # Check if `message` was passed in by user
+    if message:
+      # If it was, we respond non-interactivley
+      self.messages.append({"role": "user", "content": message})
+      self.respond()
+
+    else:
+      # If it wasn't, we start an interactive chat
+      while True:
+        try:
+          user_input = input("> ").strip()
+        except EOFError:
+          break
+        except KeyboardInterrupt:
+          print()  # Aesthetic choice
+          break
+
+        # Use `readline` to let users up-arrow to previous user messages,
+        # which is a common behavior in terminals.
+        readline.add_history(user_input)
+
+        # Add the user message to self.messages
+        self.messages.append({"role": "user", "content": user_input})
+
+        # Let the user turn on debug mode mid-chat
+        if user_input == "%debug":
+          print('', Markdown("> Entered debug mode"), '')
+          print(self.messages)
+          self.debug_mode = True
+          continue
+
+        # Respond, but gracefully handle CTRL-C / KeyboardInterrupt
+        try:
+          self.respond()
+        except KeyboardInterrupt:
+          pass
+        finally:
+          # Always end the active block. Multiple Live displays = issues
+          self.end_active_block()
+
+    if return_messages:
+      return self.messages
+
   def verify_api_key(self):
     """
     Makes sure we have an AZURE_API_KEY or OPENAI_API_KEY.
