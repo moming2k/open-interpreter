@@ -56,13 +56,15 @@ from langchain.schema import (
 )
 
 Message = Union[AIMessage, HumanMessage, SystemMessage]
+
 # Function schema for gpt-4
 function_schema = {
   "name": "run_code",
   "description":
   "Executes code on the user's machine and returns the output",
   "parameters": {
-    "type": "object",    "properties": {
+    "type": "object",
+    "properties": {
       "language": {
         "type": "string",
         "description":
@@ -999,26 +1001,30 @@ class Interpreter:
 
         # Check if we just entered a function call
         if in_function_call == False:
+
           # If so, end the last block,
           self.end_active_block()
 
           # Print newline if it was just a code block or user message
           # (this just looks nice)
           last_role = self.messages[-2]["role"]
-          if last_role == "user" or last_role == "function":            print()
+          if last_role == "user" or last_role == "function":
+            print()
 
           # then create a new code block
           self.active_block = CodeBlock()
 
         # Remember we're in a function_call
         in_function_call = True
+
         # Now let's parse the function's arguments:
 
 
         # gpt-4
         # Parse arguments and save to parsed_arguments, under function_call
         if "arguments" in self.messages[-1]["function_call"]:
-          arguments = self.messages[-1]["function_call"]["arguments"]          new_parsed_arguments = parse_partial_json(arguments)
+          arguments = self.messages[-1]["function_call"]["arguments"]
+          new_parsed_arguments = parse_partial_json(arguments)
           if new_parsed_arguments:
             # Only overwrite what we have if it's not None (which means it failed to parse)
             self.messages[-1]["function_call"][
@@ -1108,7 +1114,8 @@ class Interpreter:
           language = self.messages[-1]["function_call"]["parsed_arguments"][
             "language"]
           if language not in self.code_interpreters:
-            self.code_interpreters[language] = CodeInterpreter(language,                                                               self.debug_mode)
+            self.code_interpreters[language] = CodeInterpreter(language,
+                                                               self.debug_mode)
           code_interpreter = self.code_interpreters[language]
 
           # Let this Code Interpreter control the active_block
@@ -1136,4 +1143,7 @@ class Interpreter:
 
   def _print_welcome_message(self):
     current_version = pkg_resources.get_distribution("open-interpreter").version
-    print(f"\n Hello, Welcome to [bold]● Open Interpreter[/bold]. (v{current_version})\n")
+    print(f"\n Hello, Welcome to [bold white]⬤ Open Interpreter[/bold white]. (v{current_version})\n")
+
+# This is the main entrypoint for the CLI to pass in the arguments
+cli(Interpreter())
