@@ -43,14 +43,26 @@ from rich import print
 from rich.markdown import Markdown
 from rich.rule import Rule
 
+from typing import List, Optional, Union
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.chat_models import ChatOpenAI
+from langchain.chat_models.base import BaseChatModel
+from langchain.schema import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    messages_from_dict,
+    messages_to_dict,
+)
+
+Message = Union[AIMessage, HumanMessage, SystemMessage]
 # Function schema for gpt-4
 function_schema = {
   "name": "run_code",
   "description":
   "Executes code on the user's machine and returns the output",
   "parameters": {
-    "type": "object",
-    "properties": {
+    "type": "object",    "properties": {
       "language": {
         "type": "string",
         "description":
