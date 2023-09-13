@@ -42,6 +42,20 @@ from rich import print
 from rich.markdown import Markdown
 from rich.rule import Rule
 
+from typing import List, Optional, Union
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.chat_models import ChatOpenAI
+from langchain.chat_models.base import BaseChatModel
+from langchain.schema import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    messages_from_dict,
+    messages_to_dict,
+)
+
+Message = Union[AIMessage, HumanMessage, SystemMessage]
+
 # Function schema for gpt-4
 function_schema = {
   "name": "run_code",
@@ -101,6 +115,10 @@ class Interpreter:
     self.api_base = None # Will set it to whatever OpenAI wants
     self.context_window = 2000 # For local models only
     self.max_tokens = 750 # For local models only
+
+    # Langchain
+    self.use_langchain = False
+
     # Azure OpenAI
     self.use_azure = False
     self.azure_api_base = None
@@ -124,6 +142,9 @@ class Interpreter:
     # gpt-4 is faster, smarter, can call functions, and is all-around easier to use.
     # This makes gpt-4 better aligned with Open Interpreters priority to be easy to use.
     self.llama_instance = None
+
+    # Langchain is a experimental feature that allows you to load LLM models that support by LangChain.
+    self.langchain_instance = None
 
   def cli(self):
     # The cli takes the current instance of Interpreter,
@@ -949,6 +970,297 @@ class Interpreter:
           self.active_block.end()
           return
 
+  def welcome_langchain(self):
+    # Connect to an LLM (an large language model)
+    if self.use_langchain:
+
+      # Code-Llama
+      if self.langchain_instance == None:
+
+        # Find or install Code-Llama
+        try:
+          # self.langchain_instance = get_hf_llm(self.model, self.debug_mode,
+          #                                  self.context_window)
+          # raise
+          print("Loading Langchain...")
+        except:
+          traceback.print_exc()
+          # If it didn't work, apologize and switch to GPT-4
+
+          print(Markdown("".join([
+            f"> Failed to Initial Langchain with `{self.model}`.",
+            f"\n\n**Common Fixes:** You can follow our simple setup docs at the link below to resolve common errors.\n\n```\nhttps://github.com/KillianLucas/open-interpreter/tree/main/docs\n```",
+            f"\n\n**If you've tried that and you're still getting an error, we have likely not built the proper `{self.model}` support for your system.**",
+            "\n\n*( Running language models locally is a difficult task!* If you have insight into the best way to implement this across platforms/architectures, please join the Open Interpreter community Discord and consider contributing the project's development. )",
+            "\n\nPlease disable the use_langchain and restart again."
+          ])))
+          raise Exception("Failed to Initial Langchain with `{self.model}`.")
+
+    # Display welcome message
+    welcome_message = ""
+
+    if self.debug_mode:
+      welcome_message += "> Entered debug mode"
+
+    welcome_message += f"\n> Model set to `{self.model}`"
+
+    # If not auto_run, tell the user we'll ask permission to run code
+    # We also tell them here how to exit Open Interpreter
+    if not self.auto_run:
+      welcome_message += "\n\n" + confirm_mode_message
+
+    welcome_message = welcome_message.strip()
+
+    # Print welcome message with newlines on either side (aesthetic choice)
+    # unless we're starting with a blockquote (aesthetic choice)
+    if welcome_message != "":
+      if welcome_message.startswith(">"):
+        print(Markdown(welcome_message), '')
+      else:
+        print('', Markdown(welcome_message), '')
+
+  def chat_langchain(self, message=None, return_messages=False):
+    # Check if `message` was passed in by user
+    if message:
+      # If it was, we respond non-interactivley
+      self.messages.append({"role": "user", "content": message})
+      self.respond_langchain()
+
+    else:
+      # If it wasn't, we start an interactive chat
+      while True:
+        try:
+          user_input = input("> ").strip()
+        except EOFError:
+          break
+        except KeyboardInterrupt:
+          print()  # Aesthetic choice
+          break
+
+        # Use `readline` to let users up-arrow to previous user messages,
+        # which is a common behavior in terminals.
+        readline.add_history(user_input)
+
+        # Add the user message to self.messages
+        self.messages.append({"role": "user", "content": user_input})
+
+        # Let the user turn on debug mode mid-chat
+        if user_input == "%debug":
+          print('', Markdown("> Entered debug mode"), '')
+          print(self.messages)
+          self.debug_mode = True
+          continue
+
+        # Respond, but gracefully handle CTRL-C / KeyboardInterrupt
+        try:
+          self.respond_langchain()
+        except KeyboardInterrupt:
+          pass
+        finally:
+          # Always end the active block. Multiple Live displays = issues
+          self.end_active_block()
+
+    if return_messages:
+      return self.messages
+  def respond_langchain(self):
+    # Add relevant info to system_message
+    # (e.g. current working directory, username, os, etc.)
+    info = self.get_info_for_system_message()
+
+    # This is hacky, as we should have a different (minified) prompt for CodeLLama,
+    # but for now, to make the prompt shorter and remove "run_code" references, just get the first 2 lines:
+    # if self.local:
+    #   self.system_message = "\n".join(self.system_message.split("\n")[:2])
+    #   self.system_message += "\nOnly do what the user asks you to do, then ask what they'd like to do next."
+
+    system_message = self.system_message + "\n\n" + info
+
+    messages = tt.trim(self.messages, self.model, system_message=system_message)
+
+    if self.debug_mode:
+      print("\n", "Sending `messages` to LLM:", "\n")
+      print(messages)
+      print()
+
+    # Make LLM call
+    try:
+      response = litellm.completion(
+                model=self.model,
+                messages=messages,
+                functions=[function_schema],
+                stream=True,
+                temperature=self.temperature,
+              )
+    except:
+      if self.debug_mode:
+        traceback.print_exc()
+      error = traceback.format_exc()
+      time.sleep(3)
+
+    # Initialize message, function call trackers, and active block
+    self.messages.append({})
+    in_function_call = False
+    llama_function_call_finished = False
+    self.active_block = None
+
+    for chunk in response:
+
+      delta = chunk["choices"][0]["delta"]
+
+      # Accumulate deltas into the last message in messages
+      self.messages[-1] = merge_deltas(self.messages[-1], delta)
+
+      # Check if we're in a function call
+      condition = "function_call" in self.messages[-1]
+
+      if condition:
+        # We are in a function call.
+
+        # Check if we just entered a function call
+        if in_function_call == False:
+
+          # If so, end the last block,
+          self.end_active_block()
+
+          # Print newline if it was just a code block or user message
+          # (this just looks nice)
+          last_role = self.messages[-2]["role"]
+          if last_role == "user" or last_role == "function":
+            print()
+
+          # then create a new code block
+          self.active_block = CodeBlock()
+
+        # Remember we're in a function_call
+        in_function_call = True
+
+        # Now let's parse the function's arguments:
+
+
+        # gpt-4
+        # Parse arguments and save to parsed_arguments, under function_call
+        if "arguments" in self.messages[-1]["function_call"]:
+          arguments = self.messages[-1]["function_call"]["arguments"]
+          new_parsed_arguments = parse_partial_json(arguments)
+          if new_parsed_arguments:
+            # Only overwrite what we have if it's not None (which means it failed to parse)
+            self.messages[-1]["function_call"][
+              "parsed_arguments"] = new_parsed_arguments
+      else:
+        # We are not in a function call.
+
+        # Remember we're not in a function_call
+        in_function_call = False
+
+        # If there's no active block,
+        if self.active_block == None:
+          # Create a message block
+          self.active_block = MessageBlock()
+
+      # Update active_block
+      self.active_block.update_from_message(self.messages[-1])
+
+      # Check if we're finished
+      if chunk["choices"][0]["finish_reason"] or llama_function_call_finished:
+        if chunk["choices"][
+          0]["finish_reason"] == "function_call" or llama_function_call_finished:
+          # Time to call the function!
+          # (Because this is Open Interpreter, we only have one function.)
+
+          if self.debug_mode:
+            print("Running function:")
+            print(self.messages[-1])
+            print("---")
+
+          # Ask for user confirmation to run code
+          if self.auto_run == False:
+
+            # End the active block so you can run input() below it
+            # Save language and code so we can create a new block in a moment
+            self.active_block.end()
+            language = self.active_block.language
+            code = self.active_block.code
+
+            # Prompt user
+            response = input("  Would you like to run this code? (y/n)\n\n  ")
+            print("")  # <- Aesthetic choice
+
+            if response.strip().lower() == "y":
+              # Create a new, identical block where the code will actually be run
+              self.active_block = CodeBlock()
+              self.active_block.language = language
+              self.active_block.code = code
+
+            else:
+              # User declined to run code.
+              self.active_block.end()
+              self.messages.append({
+                "role":
+                  "function",
+                "name":
+                  "run_code",
+                "content":
+                  "User decided not to run this code."
+              })
+              return
+
+          # If we couldn't parse its arguments, we need to try again.
+          if not self.local and "parsed_arguments" not in self.messages[-1][
+            "function_call"]:
+            # After collecting some data via the below instruction to users,
+            # This is the most common failure pattern: https://github.com/KillianLucas/open-interpreter/issues/41
+
+            # print("> Function call could not be parsed.\n\nPlease open an issue on Github (openinterpreter.com, click Github) and paste the following:")
+            # print("\n", self.messages[-1]["function_call"], "\n")
+            # time.sleep(2)
+            # print("Informing the language model and continuing...")
+
+            # Since it can't really be fixed without something complex,
+            # let's just berate the LLM then go around again.
+
+            self.messages.append({
+              "role": "function",
+              "name": "run_code",
+              "content": """Your function call could not be parsed. Please use ONLY the `run_code` function, which takes two parameters: `code` and `language`. Your response should be formatted as a JSON."""
+            })
+
+            self.respond_langchain()
+            return
+
+          # Create or retrieve a Code Interpreter for this language
+          language = self.messages[-1]["function_call"]["parsed_arguments"][
+            "language"]
+          if language not in self.code_interpreters:
+            self.code_interpreters[language] = CodeInterpreter(language,
+                                                               self.debug_mode)
+          code_interpreter = self.code_interpreters[language]
+
+          # Let this Code Interpreter control the active_block
+          code_interpreter.active_block = self.active_block
+          code_interpreter.run()
+
+          # End the active_block
+          self.active_block.end()
+
+          # Append the output to messages
+          # Explicitly tell it if there was no output (sometimes "" = hallucinates output)
+          self.messages.append({
+            "role": "function",
+            "name": "run_code",
+            "content": self.active_block.output if self.active_block.output else "No output"
+          })
+
+          # Go around again
+          self.respond_langchain()
+
+        if chunk["choices"][0]["finish_reason"] != "function_call":
+          # Done!
+          self.active_block.end()
+          return
+
   def _print_welcome_message(self):
     current_version = pkg_resources.get_distribution("open-interpreter").version
-    print(f"\n Hello, Welcome to [bold]● Open Interpreter[/bold]. (v{current_version})\n")
+    print(f"\n Hello, Welcome to [bold white]⬤ Open Interpreter[/bold white]. (v{current_version})\n")
+
+# This is the main entrypoint for the CLI to pass in the arguments
+cli(Interpreter())
