@@ -140,7 +140,7 @@ class Interpreter:
 
   def get_info_for_system_message(self):
     """
-    Gets relevent information for the system message.
+    Gets relevant information for the system message.
     """
 
     info = ""
@@ -479,8 +479,8 @@ class Interpreter:
         # which is a common behavior in terminals.
         readline.add_history(user_input)
 
-        # If the user input starts with a `%` or `/`, it's a command
-        if user_input.startswith("%") or user_input.startswith("/"):
+        # If the user input starts with a `%`
+        if user_input.startswith("%"):
           self.handle_command(user_input)
           continue
 
